@@ -51,7 +51,7 @@ for pkgname,_vers in sorted(pkgs):
 
 
 def play(agent):
-    boodler = ["boodler.py", "%s/%s" % agent]
+    boodler = ["boodler", "%s/%s" % agent]
     return boodler
 
 def textplay(agent):
