@@ -17,6 +17,8 @@ import sys
 import subprocess
 import os, signal
 
+sys.path.append('/usr/lib/python2.7/site-packages')
+
 from boopak import collect # you'll need Boodler on Python's library path
 
 # same as in boodler.py
