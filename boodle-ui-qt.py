@@ -54,10 +54,13 @@ def detect_audio():
 
     cmd = "ps aux".split()
     p = subprocess.check_output(cmd)
-    if "pulseaudio" in p:
-	audio_driver = "pulse"
+    if "/usr/bin/pulseaudio" in p:
+        audio_driver = "pulse"
+    elif "/usr/bin/esd" in p:
+        audio_driver = "esd"
     else:
-	audio_driver = "oss"
+        audio_driver = "oss"
+    print "Audio driver:", audio_driver
 
 detect_audio()
 
