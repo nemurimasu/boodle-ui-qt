@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/python2
 
 # Boodler: a programmable soundscape tool
 # Designed by Andrew Plotkin <erkyrath@eblong.com>
@@ -49,9 +49,20 @@ for pkgname,_vers in sorted(pkgs):
         if res.get_one("boodler.use") == "agent":
             agents += [(pkgname, resname)]
 
+def detect_audio():
+    global audio_driver
+
+    cmd = "ps aux".split()
+    p = subprocess.check_output(cmd)
+    if "pulseaudio" in p:
+	audio_driver = "pulse"
+    else:
+	audio_driver = "oss"
+
+detect_audio()
 
 def play(agent):
-    boodler = ["boodler", "%s/%s" % agent]
+    boodler = ["boodler", "--output", audio_driver, "%s/%s" % agent]
     return boodler
 
 def textplay(agent):
