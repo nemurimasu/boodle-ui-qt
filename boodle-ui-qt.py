@@ -9,30 +9,34 @@
 # Author: Tuukka Hastrup <Tuukka.Hastrup@iki.fi>
 #
 # You should have received a copy of the GNU Library General Public License
-# along with this program. (It should be a document entitled "LGPL".) 
+# along with this program. (It should be a document entitled "LGPL".)
 # If not, see the web URL above, or write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 import sys
-import subprocess
 import os, signal
+from os.path import expanduser
+import boodle
+from boodle import agent, generator, builtin
+import multiprocessing
+import threading
 
 sys.path.append('/usr/lib/python2.7/site-packages')
 
+import boopak
 from boopak import collect # you'll need Boodler on Python's library path
 
 # same as in boodler.py
 if 'darwin' in sys.platform.lower():
-    Default_Relative_Data_Dir = 'Library/Application Support/Boodler'
+    Default_Relative_Data_Dir = '~/Library/Application Support/Boodler'
 else:
-    Default_Relative_Data_Dir = '.boodler'
+    Default_Relative_Data_Dir = '~/.boodler'
 
 basedir = None # XXX opts.basedir
 if not basedir:
     basedir = os.environ.get('BOODLER_DATA')
 if not basedir:
-    basedir = os.path.join(os.environ.get('HOME'), Default_Relative_Data_Dir)
-
+    basedir = expanduser(Default_Relative_Data_Dir)
 
 # collect the list of agents
 
@@ -49,54 +53,29 @@ for pkgname,_vers in sorted(pkgs):
         if res.get_one("boodler.use") == "agent":
             agents += [(pkgname, resname)]
 
-def detect_audio():
-    global audio_driver
+audio_driver = 'portaudio'
 
-    cmd = "ps aux".split()
-    p = subprocess.check_output(cmd)
-    if "/usr/bin/pulseaudio" in p:
-        audio_driver = "pulse"
-    elif "/usr/bin/esd" in p:
-        audio_driver = "esd"
-    else:
-        audio_driver = "oss"
-    print "Audio driver:", audio_driver
-
-detect_audio()
+def procmain(basedir, agent):
+    coldir = os.path.join(basedir, boopak.collect.Filename_Collection)
+    loader = boopak.pload.PackageLoader(coldir, importing_ok=True)
+    clas = boodle.agent.load_described(loader, agent)
+    ag = clas()
+    gen = generator.Generator(0.5, False, False, None, loader=loader)
+    gen.addagent(ag, gen.rootchannel, 0, ag.run)
+    cboodle = boodle.set_driver(audio_driver)
+    cboodle.init(None, 0, False, {})
+    cboodle.loop(generator.run_agents, gen)
+    cboodle.final()
 
 def play(agent):
-    boodler = ["boodler", "--output", audio_driver, "%s/%s" % agent]
-    return boodler
+    proc = multiprocessing.Process(target=procmain, args=(basedir, "%s/%s" % agent))
+    proc.start()
+    return proc
 
-def textplay(agent):
-    print "Playing %s/%s" % agent,
-
-    pkg = l.load(agent[0])
-    res = pkg.resources.get(agent[1])
-    print '"%s"' % res.get_one("dc.title"), "... ",
-
-    sys.stdout.flush()
-
-    boodler = subprocess.Popen(play(agent), stdin=subprocess.PIPE, 
-                               stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-
-    try:
-        boodler.communicate()
-        if boodler.returncode == 0:
-            print "Done."
-        else:
-            print "Boodler failed with exit code %s." % boodler.returncode
-    except KeyboardInterrupt:
-        print "\nInterrupted"
-        os.kill(boodler.pid, signal.SIGTERM)
-        try:
-            boodler.wait()
-        except KeyboardInterrupt:
-            os.kill(boodler.pid, signal.SIGKILL)
-
-def textmain():
-    for agent in agents:
-        textplay(agent)
+def threadmain(win):
+    proc = win.boodler
+    proc.join()
+    win.playFinished(proc.exitcode)
 
 def qtmain():
     from PyQt4 import QtCore, QtGui # you'll need PyQt4 (python-qt4)
@@ -106,7 +85,7 @@ def qtmain():
                    index.sibling(index.row(), 1).data().toString(),
                    index.sibling(index.row(), 2).data().toString(),
                    )
-        
+
         return rowdata
 
     class Window(QtGui.QWidget):
@@ -164,8 +143,8 @@ def qtmain():
                     QtCore.SIGNAL('textChanged(const QString &)'),
                     self.filterRegExpChanged)
 
-            self.connect(self.proxyView.selectionModel(), 
-                         QtCore.SIGNAL('currentRowChanged(const QModelIndex &, const QModelIndex &)'), 
+            self.connect(self.proxyView.selectionModel(),
+                         QtCore.SIGNAL('currentRowChanged(const QModelIndex &, const QModelIndex &)'),
                          self.itemSelected)
             self.connect(self.proxyView, QtCore.SIGNAL('activated(const QModelIndex &)'), self.itemActivated)
 
@@ -257,44 +236,26 @@ def qtmain():
             info += '\nSource: %s' % source
             self.selectedInfoLabel.setText(info)
 
+
         def startPlay(self, agent):
             self.stopPlay()
 
-            self.boodler = QtCore.QProcess(self)
-            self.connect(self.boodler, QtCore.SIGNAL('error(QProcess::ProcessError)'), self.playError)
-            self.connect(self.boodler, QtCore.SIGNAL('finished(int,QProcess::ExitStatus)'), self.playFinished)
-
-            cmd = play(agent)
-            print "Launching: %s" % ' '.join(cmd)
-            self.boodler.start(cmd[0], cmd[1:])
+            self.boodler = play(agent)
+            thread = threading.Thread(target=threadmain, args=(self,))
+            thread.start()
 
             self.nowPlayingButton.setEnabled(True)
 
         def stopPlay(self):
             if self.boodler:
-                self.disconnect(self.boodler, QtCore.SIGNAL('error(QProcess::ProcessError)'), self.playError)
-                self.disconnect(self.boodler, QtCore.SIGNAL('finished(int, QProcess::ExitStatus)'), self.playFinished)
-                if self.boodler.state() != QtCore.QProcess.NotRunning:
+                if self.boodler.is_alive():
                     self.boodler.terminate()
-                    if not self.boodler.waitForFinished(5000):
-                        self.boodler.kill()
                 self.boodler = None
 
             self.nowPlayingButton.setEnabled(False)
 
-        def playError(self, error):
-            if error == QtCore.QProcess.FailedToStart:
-                print "Boodler failed to start: %s" % self.boodler.errorString()
-            elif error == QtCore.QProcess.Crashed:
-                print "Boodler crashed with exit code %s." % self.boodler.exitCode()
-            else:
-                print "Boodler failed with error %s." % error
-
-            self.stopPlay()
-
-        def playFinished(self, exitCode, exitStatus):
-            if exitCode != 0:
-                print self.boodler.readAllStandardError()
+        def playFinished(self, exitCode):
+            if exitCode > 0:
                 print "Boodler failed with exit code %s." % exitCode
             else:
                 print "Boodler done playing."
@@ -303,7 +264,7 @@ def qtmain():
 
     def createAgentModel(parent):
         model = QtGui.QStandardItemModel(0, 3, parent)
-        
+
         model.setHeaderData(0, QtCore.Qt.Horizontal, QtCore.QVariant("Package"))
         model.setHeaderData(1, QtCore.Qt.Horizontal, QtCore.QVariant("Resource"))
         model.setHeaderData(2, QtCore.Qt.Horizontal, QtCore.QVariant("Title"))
@@ -329,4 +290,5 @@ def qtmain():
     sys.exit(app.exec_())
 
 
-qtmain()
+if __name__ == '__main__':
+    qtmain()
